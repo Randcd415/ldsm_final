@@ -1,0 +1,139 @@
+---
+title: "LDSM_Final_Disaster_Tract_Generator"
+author: "Cory Rand"
+date: "December 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rgdal)
+library(sp)
+library(sf)
+library(maptools)
+library(shapefiles)
+library(gdalUtils)
+library(graphics)
+library(rgeos)
+library(tidyverse)
+```
+
+## Purpose
+
+This script takes hurricane shapefiles (converted from NOAA National Hurricane Center HMZs), turns them from points to lines, and returns a csv of US tracts intersecting the paths
+
+Right now it only has 2 hurricanes (Sandy and Irene), but is scalable. Last code chunk is code that can (with a little more work) loop across input shapefiles
+
+```{r}
+#set directories
+dir = "C:/Users/7450/Documents/Harris MPP/Q4/Large Scale Data Methods/final_project"
+dir_tract = paste0(dir, "/data/shp_files/tracts")
+dir_sandy_points = paste0(dir, "/data/shp_files/Sandy/al182012_best_track")
+dir_irene_points = paste0(dir, "/data/shp_files/Irene/al092011_best_track")
+
+#read in census tracts and hurricane path points
+tracts <- readOGR(dsn = dir_tract, layer = "us_tracts")
+sandy_points <- readOGR(dsn = dir_sandy_points, layer = "Data-point")
+irene_points <- readOGR(dsn = dir_irene_points, layer = "Data-point")
+
+```
+
+
+```{r}
+#ensure shpfiles share projections
+proj4string(sandy_points)
+proj4string(irene_points)
+proj4string(tracts)
+```
+
+```{r}
+#transform points of hurricane path to a line (so that we can find all tracts along path)
+L = SpatialLines(list(Lines(list(Line(sandy_points@coords)),"X")))
+sandy_track <-SpatialLinesDataFrame(L, data.frame(ID=1:length(L)), match.ID = FALSE)
+
+#save hurricane track as shapefile
+writeOGR(sandy_track, "data/shp_files/Sandy/sandy_track", layer="sandy_track", driver="ESRI Shapefile", overwrite_layer = TRUE)
+dir_sandy_track <-paste0(dir, "/data/shp_files/Sandy/sandy_track")
+sandy_track <- readOGR(dir_sandy_track, "sandy_track")
+
+#asign same projection string as points shapefile
+proj4string(sandy_track) <- proj4string(sandy_points)
+
+
+#transform points of hurricane path to a line (so that we can find all tracts along path)
+L = SpatialLines(list(Lines(list(Line(irene_points@coords)),"X")))
+irene_track <-SpatialLinesDataFrame(L, data.frame(ID=1:length(L)), match.ID = FALSE)
+
+#save hurricane track as shapefile
+writeOGR(irene_track, "data/shp_files/Irene/irene_track", layer="irene_track", driver="ESRI Shapefile", overwrite_layer = TRUE)
+dir_irene_track <-paste0(dir, "/data/shp_files/Irene/irene_track")
+irene_track <- readOGR(dir_irene_track, "irene_track")
+
+#asign same projection string as points shapefile
+proj4string(irene_track) <- proj4string(irene_points)
+
+plot(sandy_track)
+plot(irene_track)
+
+```
+
+
+```{r}
+#clip census tracts to just those which instersect with tracks
+sandy_tracts <- tracts[sandy_track,]
+
+plot(sandy_tracts)
+lines(sandy_track, col = "red")
+
+
+irene_tracts <- tracts[irene_track,]
+
+plot(irene_tracts)
+lines(irene_track, col = "red")
+
+all_tracts <- append(sandy_tracts@data$GEOID, irene_tracts@data$GEOID) %>% unique()
+
+#intentionally make columns 1 year later. Means they were affected 1 year after disaster
+disaster_csv <- data.frame(tract_id = all_tracts, 
+                           `2012` = all_tracts %in% irene_tracts@data$GEOID %>% as.numeric(),
+                           `2013` = all_tracts %in% sandy_tracts@data$GEOID %>% as.numeric())
+
+disaster_csv_long <- gather(disaster_csv, key = "Year_After_Disaster", value = "Disaster", -tract_id)
+disaster_csv_long$Year <- substr(disaster_csv_long$Year, 2, 5)
+write.csv(disaster_csv_long, paste0(dir, "/data/disaster.csv"))
+```
+
+```{r}
+all_dis_tracks <- list()
+
+var = "Sandy"
+
+dir_points = paste0(dir, "/data/shp_files/", var, "/", var)
+dis_points <- readOGR(dsn = dir_points, layer = "Data-point")
+
+proj4string(dis_points) = proj4string(tracts)
+
+#transform points of hurricane path to a line (so that we can find all tracts along path)
+L = SpatialLines(list(Lines(list(Line(dis_points@coords)),"X")))
+dis_track <-SpatialLinesDataFrame(L, data.frame(ID=1:length(L)), match.ID = FALSE)
+
+#save hurricane track as shapefile
+dsn = paste0(dir, "data/shp_files/", var, "/", var, "_track")
+
+writeOGR(obj = dis_track, 
+         dsn = dsn, 
+         layer = paste0(var, "_track"), 
+         driver="ESRI Shapefile", 
+         overwrite_layer = TRUE)
+
+dis_shp <- readOGR(dsn, "sandy_track")
+
+proj4string(dis_shp) <- proj4string(dis_points)
+
+#clip census tracts to just those which instersect with Sandy track
+specific_tracts <- tracts[dis_track,]
+
+#make a nested list here, each labeled. after loop, turn that into dataframe with labels as columns
+all_dis_tracks <- append(all_dis_tracks, specific_tracts@data$GEOID) %>% unique()
+
+```
